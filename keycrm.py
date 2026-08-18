@@ -13,7 +13,14 @@ KEYCRM_MANAGER_ID = os.getenv("KEYCRM_MANAGER_ID")  # необязательно
 KEYCRM_API_URL = "https://openapi.keycrm.app/v1/pipelines/cards"
 
 
-def create_lead_card(full_name: str, phone: str, username: str, source: str, source_id: int = None) -> dict:
+def create_lead_card(
+    full_name: str,
+    phone: str,
+    username: str,
+    source: str,
+    source_id: int = None,
+    details: str = None,
+) -> dict:
     """
     Создаёт карточку в воронке KeyCRM для нового лида из Telegram-бота.
     Обязательное поле — "contact" с хотя бы одним заполненным полем
@@ -22,15 +29,22 @@ def create_lead_card(full_name: str, phone: str, username: str, source: str, sou
     source_id: если передан — используется он (например, конкретный источник
     под ссылку/группу). Если None — используется KEYCRM_SOURCE_ID из .env
     (общий источник по умолчанию, если задан).
+
+    details: свободный текст от клиента (VIN-код + что нужно) — попадёт
+    в комментарий менеджера (заметки) в карточке.
     """
     if not KEYCRM_API_TOKEN:
         raise RuntimeError("KEYCRM_API_TOKEN не задан в .env")
 
     title = f"Заявка з Telegram-бота ({source})"
 
+    comment = f"Username: {username}\nДжерело: {source}"
+    if details:
+        comment += f"\n\nЗапит клієнта (VIN / потрібно):\n{details}"
+
     data = {
         "title": title,
-        "manager_comment": f"Username: {username}\nДжерело: {source}",
+        "manager_comment": comment,
         "contact": {
             "full_name": full_name or "Без імені",
             "phone": phone,

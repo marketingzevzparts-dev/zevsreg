@@ -38,7 +38,7 @@ MANAGERS = [
     },
 ]
 
-ASK_CONTACT = range(1)[0]
+ASK_CONTACT, ASK_DETAILS = range(2)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -135,21 +135,36 @@ async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         )
         return ASK_CONTACT
 
-    phone = contact.phone_number
-    full_name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
-    username = f"@{user.username}" if user.username else "-"
+    # Сохраняем контакт, карточку создадим после ответа на следующий вопрос
+    context.user_data["phone"] = contact.phone_number
+    context.user_data["full_name"] = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
+    context.user_data["username"] = f"@{user.username}" if user.username else "-"
+
+    await update.message.reply_text(
+        "Дякуємо! Тепер, будь ласка, коротко напишіть VIN-код авто та що саме "
+        "потрібно (запчастини, аксесуари, розхідники тощо):",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    return ASK_DETAILS
+
+
+async def ask_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    details = update.message.text
+
+    phone = context.user_data.get("phone")
+    full_name = context.user_data.get("full_name")
+    username = context.user_data.get("username")
     source = context.user_data.get("source", "direct")
     source_id = SOURCE_IDS.get(source)  # None -> используется источник по умолчанию из .env
 
     try:
-        create_lead_card(full_name, phone, username, source, source_id)
+        create_lead_card(full_name, phone, username, source, source_id, details)
     except Exception as e:
         logger.error("Помилка створення картки в KeyCRM: %s", e)
 
     await update.message.reply_text(
         "✅ Заявку прийнято! Наш менеджер зв'яжеться з вами найближчим часом.\n\n"
-        "Якщо не хочете чекати — напишіть менеджеру напряму:",
-        reply_markup=ReplyKeyboardRemove(),
+        "Якщо не хочете чекати — напишіть менеджеру напряму:"
     )
     await update.message.reply_text(
         f"{COMPANY_NAME} — зв'яжіться з менеджером:",
@@ -185,6 +200,7 @@ def main() -> None:
         entry_points=[CommandHandler("start", start)],
         states={
             ASK_CONTACT: [MessageHandler(filters.CONTACT, ask_contact)],
+            ASK_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_details)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
