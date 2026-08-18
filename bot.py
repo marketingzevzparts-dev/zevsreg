@@ -1,6 +1,5 @@
 import logging
 import os
-from datetime import datetime
 
 from dotenv import load_dotenv
 from telegram import (
@@ -20,7 +19,7 @@ from telegram.ext import (
     filters,
 )
 
-from sheets import append_lead
+from keycrm import create_lead_card
 
 load_dotenv()
 
@@ -96,6 +95,16 @@ WELCOME_MESSAGES = {
     ),
 }
 
+# Сопоставление кода ссылки (?start=КОД) → ID источника в KeyCRM.
+# Источники созданы в KeyCRM: Настройки → Джерела (ID видно по наведению на "ⓘ").
+SOURCE_IDS = {
+    "leopard3": 15,
+    "sealion05": 16,
+    "sealion06": 17,
+    "sealion07ev": 18,
+    "songl": 19,
+}
+
 
 def managers_keyboard() -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(m["name"], url=m["url"])] for m in MANAGERS]
@@ -130,12 +139,12 @@ async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     full_name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
     username = f"@{user.username}" if user.username else "-"
     source = context.user_data.get("source", "direct")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    source_id = SOURCE_IDS.get(source)  # None -> используется источник по умолчанию из .env
 
     try:
-        append_lead([timestamp, full_name, phone, username, str(user.id), source])
+        create_lead_card(full_name, phone, username, source, source_id)
     except Exception as e:
-        logger.error("Помилка запису в Google Sheets: %s", e)
+        logger.error("Помилка створення картки в KeyCRM: %s", e)
 
     await update.message.reply_text(
         "✅ Заявку прийнято! Наш менеджер зв'яжеться з вами найближчим часом.\n\n"
@@ -189,3 +198,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
