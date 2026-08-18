@@ -1,0 +1,117 @@
+# Zeus Parts — Telegram-бот для приёма заявок
+
+Бот принимает заявку клиента (какая деталь + контакт), пишет её в Google Таблицу
+и присылает клиенту 3 кнопки для связи с менеджером напрямую.
+
+## 1. Установка
+
+```bash
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## 2. Создание бота в Telegram
+
+1. Напишите [@BotFather](https://t.me/BotFather) → `/newbot`
+2. Задайте имя и username (например, `zeus_parts_bot`)
+3. Скопируйте токен — вставьте в `.env` как `BOT_TOKEN`
+
+## 3. Настройка Google Sheets (доступ через Service Account)
+
+1. Зайдите в [Google Cloud Console](https://console.cloud.google.com/)
+2. Создайте проект → включите **Google Sheets API** и **Google Drive API**
+3. Создайте Service Account: *IAM & Admin → Service Accounts → Create Service Account*
+4. В созданном аккаунте: *Keys → Add Key → Create new key → JSON* — скачается файл,
+   переименуйте его в `credentials.json` и положите в папку проекта
+5. Откройте JSON-файл, скопируйте поле `client_email`
+   (выглядит как `xxxxx@xxxxx.iam.gserviceaccount.com`)
+6. Создайте Google Таблицу, нажмите «Настройки доступа» → «Добавить пользователя» →
+   вставьте этот email, дайте права **Редактор**
+7. Скопируйте ID таблицы из URL:
+   `https://docs.google.com/spreadsheets/d/ЭТОТ_ID/edit` → вставьте в `.env` как `GOOGLE_SHEET_ID`
+
+## 4. Настройка .env
+
+```bash
+cp .env.example .env
+```
+
+Заполните `BOT_TOKEN`, `GOOGLE_SHEET_ID` и ссылки трёх менеджеров
+(`MANAGER_1_URL`, `MANAGER_2_URL`, `MANAGER_3_URL`) — можно Telegram (`https://t.me/username`),
+телефон (`tel:+380...` работает не во всех кнопках Telegram, поэтому лучше WhatsApp-ссылка
+`https://wa.me/380XXXXXXXXX`) или сайт.
+
+## 5. Запуск
+
+```bash
+python bot.py
+```
+
+## Как это работает
+
+1. `/start` → приветствие "Zeus Parts — автозапчасти на китайские авто" + запрос,
+   какая деталь нужна
+2. Клиент пишет текстом марку/модель/деталь
+3. Бот просит поделиться контактом (кнопка «Отправить мой контакт»)
+4. Данные (дата, имя, телефон, username, что нужно, Telegram ID) добавляются
+   новой строкой в Google Таблицу
+5. Клиенту приходит подтверждение + 3 кнопки на менеджеров, если не хочет ждать
+
+## Ссылки для 10 групп (чтобы знать, откуда пришла заявка)
+
+Бот поддерживает Telegram deep-linking через параметр `?start=`. Для каждой группы
+сделайте свою ссылку с уникальным коротким кодом (латиница/цифры/подчёркивание, без пробелов):
+
+```
+https://t.me/zeus_partsreg_bot?start=group1
+https://t.me/zeus_partsreg_bot?start=group2
+https://t.me/zeus_partsreg_bot?start=group3
+...
+https://t.me/zeus_partsreg_bot?start=group10
+```
+
+Лучше сразу давать осмысленные коды вместо `group1`, `group2` — например:
+`odesa_chat`, `avto_kiev`, `chery_club`, `instagram_bio` и т.д. — так в таблице сразу видно, что за источник.
+
+Когда клиент переходит по такой ссылке и жмёт «Старт», бот запоминает этот код и записывает
+его в колонку **«Источник (группа)»** вместе с остальными данными заявки. Если человек просто
+написал боту напрямую (без ссылки) — в этой колонке будет `direct`.
+
+## Деплой на Railway
+
+Бот работает через polling (без вебхука и домена), поэтому на Railway достаточно
+просто держать процесс запущенным как **Worker**.
+
+1. **Залейте проект в GitHub** (обычный `git init` → `git add .` → `git commit` → `git push`).
+   `.env` и `credentials.json` в репозиторий не попадут — они в `.gitignore`.
+
+2. **Создайте проект на [railway.app](https://railway.app)**:
+   *New Project → Deploy from GitHub repo* → выберите этот репозиторий.
+
+3. **Задайте переменные окружения** — *Variables* в настройках сервиса, добавьте те же
+   ключи, что и в `.env.example`:
+   - `BOT_TOKEN`
+   - `COMPANY_NAME`
+   - `GOOGLE_SHEET_ID`, `GOOGLE_SHEET_TAB`
+   - `MANAGER_1_NAME` / `MANAGER_1_URL` ... `MANAGER_3_NAME` / `MANAGER_3_URL`
+
+4. **Ключ Google передайте через переменную, а не файл.** Откройте скачанный
+   `credentials.json`, скопируйте всё содержимое (это JSON в одну структуру) и вставьте
+   как значение переменной `GOOGLE_CREDENTIALS_JSON` — целиком, одной строкой.
+   Код уже умеет читать credentials из этой переменной (приоритет выше, чем у файла).
+
+5. **Start command**: Railway сам подхватит `Procfile` (`worker: python bot.py`).
+   Если попросит выбрать тип процесса — выбирайте **Worker**, не Web (боту не нужен
+   открытый порт/HTTP).
+
+6. Нажмите **Deploy** — в логах должно появиться, что бот запущен (без ошибок токена/таблицы).
+   Дальше бот работает 24/7, Railway сам перезапускает процесс при падении.
+
+> Важно: если раньше запускали бота локально — остановите его там, иначе Telegram
+> будет ругаться на два одновременных polling-подключения (ошибка `Conflict`).
+
+## Деплой на обычный сервер (альтернатива Railway)
+
+Если вместо Railway хотите свой VPS — любой дешёвый Ubuntu-сервер + `systemd` или `pm2`/`screen`.
+Просто держите процесс `python bot.py` постоянно запущенным.
