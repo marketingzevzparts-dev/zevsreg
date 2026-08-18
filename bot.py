@@ -27,27 +27,22 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 COMPANY_NAME = os.getenv("COMPANY_NAME", "Zeus Parts")
 
-# 4 кнопки — Telegram и Viber для двух менеджеров.
-# Значения по умолчанию уже подставлены под реальных менеджеров Zeus Parts,
-# при желании поменяйте через .env
+# Telegram-кнопки (Viber-ссылки Telegram не пропускает как inline-кнопки —
+# схема viber:// не входит в разрешённый список http/https/tg://,
+# поэтому номера Viber даём просто текстом ниже).
 MANAGERS = [
     {
         "name": "✈️ Володимир (Telegram)",
         "url": os.getenv("MANAGER_1_TELEGRAM_URL", "https://t.me/volodymyr_zevsparts"),
     },
     {
-        "name": "🟣 Володимир (Viber)",
-        "url": os.getenv("MANAGER_1_VIBER_URL", "viber://chat?number=%2B380676455443"),
-    },
-    {
         "name": "✈️ Олександр (Telegram)",
         "url": os.getenv("MANAGER_2_TELEGRAM_URL", "https://t.me/alexandro_zevs_parts"),
     },
-    {
-        "name": "🟣 Олександр (Viber)",
-        "url": os.getenv("MANAGER_2_VIBER_URL", "viber://chat?number=%2B380675262752"),
-    },
 ]
+
+MANAGER_1_VIBER_PHONE = os.getenv("MANAGER_1_VIBER_PHONE", "+380676455443")
+MANAGER_2_VIBER_PHONE = os.getenv("MANAGER_2_VIBER_PHONE", "+380675262752")
 
 ASK_CONTACT = range(1)[0]
 
@@ -56,28 +51,32 @@ logger = logging.getLogger(__name__)
 
 
 def managers_keyboard() -> InlineKeyboardMarkup:
-    # По 2 кнопки в ряд: [Telegram, Viber] для каждого менеджера
-    buttons = [
-        [InlineKeyboardButton(MANAGERS[0]["name"], url=MANAGERS[0]["url"]),
-         InlineKeyboardButton(MANAGERS[1]["name"], url=MANAGERS[1]["url"])],
-        [InlineKeyboardButton(MANAGERS[2]["name"], url=MANAGERS[2]["url"]),
-         InlineKeyboardButton(MANAGERS[3]["name"], url=MANAGERS[3]["url"])],
-    ]
+    buttons = [[InlineKeyboardButton(m["name"], url=m["url"])] for m in MANAGERS]
     return InlineKeyboardMarkup(buttons)
+
+
+def managers_text() -> str:
+    return (
+        f"{COMPANY_NAME} — зв'яжіться з менеджером:\n\n"
+        f"✈️ Telegram — кнопки нижче\n\n"
+        f"🟣 Viber:\n"
+        f"Володимир — {MANAGER_1_VIBER_PHONE}\n"
+        f"Олександр — {MANAGER_2_VIBER_PHONE}"
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Deep-link source: t.me/zeus_partsreg_bot?start=group1 -> context.args = ["group1"]
     source = context.args[0] if context.args else "direct"
     context.user_data["source"] = source
-    logger.info("Новый /start от %s, источник: %s", update.effective_user.id, source)
+    logger.info("Новий /start від %s, джерело: %s", update.effective_user.id, source)
 
     text = (
-        f"👋 Добро пожаловать в *{COMPANY_NAME}*!\n\n"
-        "Оставьте заявку — поделитесь контактом, и наш менеджер свяжется с вами "
-        "в ближайшее время."
+        f"👋 Ласкаво просимо до *{COMPANY_NAME}*!\n\n"
+        "Залиште заявку — поділіться контактом, і наш менеджер зв'яжеться з вами "
+        "найближчим часом."
     )
-    contact_button = KeyboardButton("📱 Отправить мой контакт", request_contact=True)
+    contact_button = KeyboardButton("📱 Надіслати мій контакт", request_contact=True)
     keyboard = ReplyKeyboardMarkup([[contact_button]], resize_keyboard=True, one_time_keyboard=True)
 
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
@@ -90,7 +89,7 @@ async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     if contact is None:
         await update.message.reply_text(
-            "Пожалуйста, нажмите кнопку «📱 Отправить мой контакт», чтобы продолжить."
+            "Будь ласка, натисніть кнопку «📱 Надіслати мій контакт», щоб продовжити."
         )
         return ASK_CONTACT
 
@@ -103,15 +102,15 @@ async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     try:
         append_lead([timestamp, full_name, phone, username, str(user.id), source])
     except Exception as e:
-        logger.error("Ошибка записи в Google Sheets: %s", e)
+        logger.error("Помилка запису в Google Sheets: %s", e)
 
     await update.message.reply_text(
-        "✅ Заявка принята! Наш менеджер свяжется с вами в ближайшее время.\n\n"
-        "Если не хотите ждать — напишите менеджеру напрямую:",
+        "✅ Заявку прийнято! Наш менеджер зв'яжеться з вами найближчим часом.\n\n"
+        "Якщо не хочете чекати — напишіть менеджеру напряму:",
         reply_markup=ReplyKeyboardRemove(),
     )
     await update.message.reply_text(
-        f"{COMPANY_NAME} — свяжитесь с менеджером:",
+        managers_text(),
         reply_markup=managers_keyboard(),
     )
 
@@ -120,7 +119,7 @@ async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Заявка отменена. Введите /start, чтобы начать заново.",
+    await update.message.reply_text("Заявку скасовано. Введіть /start, щоб почати знову.",
                                      reply_markup=ReplyKeyboardRemove())
     context.user_data.clear()
     return ConversationHandler.END
@@ -129,7 +128,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def fallback_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reply with manager buttons if user writes something outside the flow."""
     await update.message.reply_text(
-        "Чтобы оставить заявку — введите /start.\n\nИли напишите менеджеру напрямую:",
+        "Щоб залишити заявку — введіть /start.\n\n" + managers_text(),
         reply_markup=managers_keyboard(),
     )
 
@@ -157,3 +156,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
