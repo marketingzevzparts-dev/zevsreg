@@ -17,7 +17,7 @@ GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")  # весь JSON-
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 GOOGLE_SHEET_TAB = os.getenv("GOOGLE_SHEET_TAB", "Заявки")
 
-_HEADERS = ["Дата", "Имя", "Телефон", "Username", "Что нужно", "Telegram ID", "Источник (группа)"]
+_HEADERS = ["Дата", "Имя", "Телефон", "Username", "Telegram ID", "Источник (группа)"]
 
 _client = None
 _sheet = None
@@ -59,6 +59,6 @@ def _get_sheet():
 
 
 def append_lead(row: list) -> None:
-    """Append a single lead row: [timestamp, full_name, phone, username, need, tg_id, source]"""
+    """Append a single lead row: [timestamp, full_name, phone, username, tg_id, source]"""
     sheet = _get_sheet()
     sheet.append_row(row, value_input_option="USER_ENTERED")

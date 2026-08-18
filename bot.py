@@ -49,7 +49,7 @@ MANAGERS = [
     },
 ]
 
-ASK_NEED, ASK_CONTACT = range(2)
+ASK_CONTACT = range(1)[0]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -74,28 +74,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     text = (
         f"👋 Добро пожаловать в *{COMPANY_NAME}*!\n\n"
-        "🚗 Автозапчасти на китайские авто — Chery, Geely, Haval, Great Wall, "
-        "Changan, Exeed, JAC, Omoda, Jaecoo и др.\n\n"
-        "Оставьте заявку — напишите, какая деталь нужна и на какой автомобиль, "
-        "а затем поделитесь контактом. Наш менеджер свяжется с вами в ближайшее время."
+        "Оставьте заявку — поделитесь контактом, и наш менеджер свяжется с вами "
+        "в ближайшее время."
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
-    await update.message.reply_text(
-        "Напишите, пожалуйста, какая деталь нужна и марка/модель/год авто:"
-    )
-    return ASK_NEED
-
-
-async def ask_need(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["need"] = update.message.text
-
     contact_button = KeyboardButton("📱 Отправить мой контакт", request_contact=True)
     keyboard = ReplyKeyboardMarkup([[contact_button]], resize_keyboard=True, one_time_keyboard=True)
 
-    await update.message.reply_text(
-        "Отлично! Теперь поделитесь контактом, чтобы менеджер мог вам перезвонить:",
-        reply_markup=keyboard,
-    )
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
     return ASK_CONTACT
 
 
@@ -112,12 +97,11 @@ async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     phone = contact.phone_number
     full_name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
     username = f"@{user.username}" if user.username else "-"
-    need = context.user_data.get("need", "-")
     source = context.user_data.get("source", "direct")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
-        append_lead([timestamp, full_name, phone, username, need, str(user.id), source])
+        append_lead([timestamp, full_name, phone, username, str(user.id), source])
     except Exception as e:
         logger.error("Ошибка записи в Google Sheets: %s", e)
 
@@ -159,7 +143,6 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            ASK_NEED: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_need)],
             ASK_CONTACT: [MessageHandler(filters.CONTACT, ask_contact)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
