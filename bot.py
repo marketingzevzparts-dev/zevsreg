@@ -26,17 +26,8 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 COMPANY_NAME = os.getenv("COMPANY_NAME", "ZEVS PARTS")
 
-# Telegram-кнопки менеджеров
-MANAGERS = [
-    {
-        "name": "✈️ Володимир (Telegram)",
-        "url": os.getenv("MANAGER_1_TELEGRAM_URL", "https://t.me/volodymyr_zevsparts"),
-    },
-    {
-        "name": "✈️ Олександр (Telegram)",
-        "url": os.getenv("MANAGER_2_TELEGRAM_URL", "https://t.me/alexandro_zevs_parts"),
-    },
-]
+# Ссылка на группу Telegram (вместо кнопок менеджеров)
+GROUP_URL = os.getenv("GROUP_URL", "https://t.me/+NoAgrHxYygA0Y2Ey")
 
 ASK_CONTACT, ASK_DETAILS = range(2)
 
@@ -103,19 +94,54 @@ SOURCE_IDS = {
     "sealion06": 17,
     "sealion07ev": 18,
     "songl": 19,
+    "ads": 20,  # реклама Facebook/Telegram Ads — t.me/zeus_partsreg_bot?start=ads
 }
 
 
-def managers_keyboard() -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(m["name"], url=m["url"])] for m in MANAGERS]
+def group_keyboard() -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton("👥 Наша група в Telegram", url=GROUP_URL)]]
     return InlineKeyboardMarkup(buttons)
+
+
+# UTM-метки в ссылке для рекламы (Facebook/Telegram Ads).
+# Telegram разрешает в ?start= только буквы/цифры/подчёркивание/дефис —
+# без "=", "&", пробелов. Поэтому UTM кодируем компактно прямо в коде ссылки:
+#   ads__cmp-НАЗВАНИЕ_КАМПАНИИ__src-facebook__med-cpc__cnt-креатив1__trm-ключ
+# Каждый параметр необязателен, можно указать только нужные. Например:
+#   t.me/zeus_partsreg_bot?start=ads__cmp-litni_znizky__src-facebook__med-cpc
+UTM_PREFIX = "ads"
+UTM_FIELD_CODES = {
+    "cmp": "utm_campaign",
+    "src": "utm_source",
+    "med": "utm_medium",
+    "cnt": "utm_content",
+    "trm": "utm_term",
+}
+
+
+def parse_ads_payload(payload: str):
+    """
+    Если payload начинается с "ads" — считаем это рекламной ссылкой,
+    возвращаем (source_key="ads", utm_dict). Иначе (payload, {}).
+    """
+    if not payload.startswith(UTM_PREFIX):
+        return payload, {}
+
+    utm = {}
+    for part in payload.split("__")[1:]:
+        for code, field in UTM_FIELD_CODES.items():
+            if part.startswith(code + "-"):
+                utm[field] = part[len(code) + 1:]
+    return UTM_PREFIX, utm
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Deep-link source: t.me/zeus_partsreg_bot?start=group1 -> context.args = ["group1"]
-    source = context.args[0] if context.args else "direct"
+    raw_payload = context.args[0] if context.args else "direct"
+    source, utm = parse_ads_payload(raw_payload)
     context.user_data["source"] = source
-    logger.info("Новий /start від %s, джерело: %s", update.effective_user.id, source)
+    context.user_data["utm"] = utm
+    logger.info("Новий /start від %s, джерело: %s, utm: %s", update.effective_user.id, source, utm)
 
     text = WELCOME_MESSAGES.get(source, DEFAULT_WELCOME)
     contact_button = KeyboardButton("📱 Надіслати мій контакт", request_contact=True)
@@ -155,20 +181,21 @@ async def ask_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     full_name = context.user_data.get("full_name")
     username = context.user_data.get("username")
     source = context.user_data.get("source", "direct")
+    utm = context.user_data.get("utm", {})
     source_id = SOURCE_IDS.get(source)  # None -> используется источник по умолчанию из .env
 
     try:
-        create_lead_card(full_name, phone, username, source, source_id, details)
+        create_lead_card(full_name, phone, username, source, source_id, details, utm)
     except Exception as e:
         logger.error("Помилка створення картки в KeyCRM: %s", e)
 
     await update.message.reply_text(
         "✅ Заявку прийнято! Наш менеджер зв'яжеться з вами найближчим часом.\n\n"
-        "Якщо не хочете чекати — напишіть менеджеру напряму:"
+        "Приєднуйтесь до нашої групи, щоб не пропустити новини та акції:"
     )
     await update.message.reply_text(
-        f"{COMPANY_NAME} — зв'яжіться з менеджером:",
-        reply_markup=managers_keyboard(),
+        f"{COMPANY_NAME}",
+        reply_markup=group_keyboard(),
     )
 
     context.user_data.clear()
@@ -183,10 +210,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def fallback_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Reply with manager buttons if user writes something outside the flow."""
+    """Reply with group button if user writes something outside the flow."""
     await update.message.reply_text(
-        "Щоб залишити заявку — введіть /start.\n\nАбо напишіть менеджеру напряму:",
-        reply_markup=managers_keyboard(),
+        "Щоб залишити заявку — введіть /start.\n\nАбо приєднуйтесь до нашої групи:",
+        reply_markup=group_keyboard(),
     )
 
 

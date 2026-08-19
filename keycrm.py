@@ -20,6 +20,7 @@ def create_lead_card(
     source: str,
     source_id: int = None,
     details: str = None,
+    utm: dict = None,
 ) -> dict:
     """
     Создаёт карточку в воронке KeyCRM для нового лида из Telegram-бота.
@@ -32,6 +33,9 @@ def create_lead_card(
 
     details: свободный текст от клиента (VIN-код + что нужно) — попадёт
     в комментарий менеджера (заметки) в карточке.
+
+    utm: словарь с ключами utm_source, utm_medium, utm_campaign, utm_term,
+    utm_content — для рекламных ссылок (Facebook/Telegram Ads).
     """
     if not KEYCRM_API_TOKEN:
         raise RuntimeError("KEYCRM_API_TOKEN не задан в .env")
@@ -60,6 +64,11 @@ def create_lead_card(
 
     if KEYCRM_MANAGER_ID:
         data["manager_id"] = int(KEYCRM_MANAGER_ID)
+
+    if utm:
+        for field in ("utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"):
+            if utm.get(field):
+                data[field] = utm[field]
 
     headers = {
         "Content-Type": "application/json",
