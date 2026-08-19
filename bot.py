@@ -103,6 +103,32 @@ def group_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+    """Отправляет сообщение и запоминает его ID, чтобы потом можно было удалить."""
+    msg = await update.message.reply_text(*args, **kwargs)
+    context.user_data.setdefault("bot_message_ids", []).append(msg.message_id)
+    return msg
+
+
+async def clear_old_bot_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Удаляет сообщения, которые бот отправлял этому клиенту в предыдущем цикле
+    (приветствие, вопросы, подтверждение и т.д.), чтобы при повторном /start
+    переписка не копилась и выглядела чисто.
+
+    Ограничение Telegram: бот может удалять только СВОИ СОБСТВЕННЫЕ сообщения —
+    сообщения, отправленные самим клиентом (его /start, VIN-код и т.д.),
+    удалить программно нельзя, это ограничение самого Telegram Bot API.
+    """
+    message_ids = context.user_data.get("bot_message_ids", [])
+    for msg_id in message_ids:
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
+        except Exception:
+            pass  # сообщение могло быть уже удалено или старше 48 часов — пропускаем
+    context.user_data["bot_message_ids"] = []
+
+
 # UTM-метки в ссылке для рекламы (Facebook/Telegram Ads).
 # Telegram разрешает в ?start= только буквы/цифры/подчёркивание/дефис —
 # без "=", "&", пробелов. Поэтому UTM кодируем компактно прямо в коде ссылки:
@@ -136,18 +162,23 @@ def parse_ads_payload(payload: str):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+
+    # Стираем сообщения бота из предыдущего цикла, чтобы переписка не копилась
+    await clear_old_bot_messages(update, context)
+
     # Deep-link source: t.me/zeus_partsreg_bot?start=group1 -> context.args = ["group1"]
     raw_payload = context.args[0] if context.args else "direct"
     source, utm = parse_ads_payload(raw_payload)
     context.user_data["source"] = source
     context.user_data["utm"] = utm
-    logger.info("Новий /start від %s, джерело: %s, utm: %s", update.effective_user.id, source, utm)
+    logger.info("Новий /start від %s, джерело: %s, utm: %s", user.id, source, utm)
 
     text = WELCOME_MESSAGES.get(source, DEFAULT_WELCOME)
     contact_button = KeyboardButton("📱 Надіслати мій контакт", request_contact=True)
     keyboard = ReplyKeyboardMarkup([[contact_button]], resize_keyboard=True, one_time_keyboard=True)
 
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    await send_and_track(update, context, text, parse_mode="Markdown", reply_markup=keyboard)
     return ASK_CONTACT
 
 
@@ -156,7 +187,8 @@ async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     user = update.effective_user
 
     if contact is None:
-        await update.message.reply_text(
+        await send_and_track(
+            update, context,
             "Будь ласка, натисніть кнопку «📱 Надіслати мій контакт», щоб продовжити."
         )
         return ASK_CONTACT
@@ -166,7 +198,8 @@ async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     context.user_data["full_name"] = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
     context.user_data["username"] = f"@{user.username}" if user.username else "-"
 
-    await update.message.reply_text(
+    await send_and_track(
+        update, context,
         "Дякуємо! Тепер, будь ласка, коротко напишіть VIN-код авто та що саме "
         "потрібно (запчастини, аксесуари, розхідники тощо):",
         reply_markup=ReplyKeyboardRemove(),
@@ -189,23 +222,32 @@ async def ask_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     except Exception as e:
         logger.error("Помилка створення картки в KeyCRM: %s", e)
 
-    await update.message.reply_text(
+    await send_and_track(
+        update, context,
         "✅ Заявку прийнято! Наш менеджер зв'яжеться з вами найближчим часом.\n\n"
         "Приєднуйтесь до нашої групи, щоб не пропустити новини та акції:"
     )
-    await update.message.reply_text(
+    await send_and_track(
+        update, context,
         f"{COMPANY_NAME}",
         reply_markup=group_keyboard(),
     )
 
-    context.user_data.clear()
+    # Чистим только рабочие данные заявки, но НЕ bot_message_ids —
+    # список нужен, чтобы стереть эти же сообщения при следующем /start
+    for key in ("phone", "full_name", "username", "source", "utm"):
+        context.user_data.pop(key, None)
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Заявку скасовано. Введіть /start, щоб почати знову.",
-                                     reply_markup=ReplyKeyboardRemove())
-    context.user_data.clear()
+    await send_and_track(
+        update, context,
+        "Заявку скасовано. Введіть /start, щоб почати знову.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    for key in ("phone", "full_name", "username", "source", "utm"):
+        context.user_data.pop(key, None)
     return ConversationHandler.END
 
 
