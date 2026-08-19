@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 
 from keycrm import create_lead_card
+from fb_capi import send_lead_event
 
 load_dotenv()
 
@@ -221,6 +222,14 @@ async def ask_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         create_lead_card(full_name, phone, username, source, source_id, details, utm)
     except Exception as e:
         logger.error("Помилка створення картки в KeyCRM: %s", e)
+
+    # Заявка пришла по рекламной ссылке (?start=ads...) — сообщаем об этом
+    # Facebook через Conversions API, чтобы реклама оптимизировалась
+    if source == UTM_PREFIX:
+        try:
+            send_lead_event(phone, source_label=source)
+        except Exception as e:
+            logger.error("Помилка відправки Lead-події в Facebook CAPI: %s", e)
 
     await send_and_track(
         update, context,
