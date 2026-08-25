@@ -5,13 +5,11 @@ from dotenv import load_dotenv
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
     Update,
 )
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -27,10 +25,13 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 COMPANY_NAME = os.getenv("COMPANY_NAME", "ZEVS PARTS")
 
-# Ссылка на группу Telegram (вместо кнопок менеджеров)
+# Ссылка на группу Telegram
 GROUP_URL = os.getenv("GROUP_URL", "https://t.me/+NoAgrHxYygA0Y2Ey")
 
-ASK_CONTACT, ASK_DETAILS = range(2)
+ASK_REQUEST = range(1)[0]
+
+REMINDER_DELAY_SECONDS = 30 * 60       # напоминание "Ви тут?" через 30 хв
+BUTTONS_REFRESH_DELAY_SECONDS = 60 * 60  # перемалёвка тех же кнопок через 1 годину
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,7 +40,8 @@ DEFAULT_WELCOME = (
     "Вас вітає *ZEVS PARTS* — склад запчастин BYD, Leopard, Denza\n\n"
     "Наш менеджер готовий допомогти Вам з підбором запчастин, розхідників, "
     "аксесуарів.\n\n"
-    "Залишите своє звернення та наш менеджер зв'яжеться з Вами."
+    "Натисніть «Відправити запит», щоб залишити звернення, або приєднуйтесь "
+    "до нашої групи."
 )
 
 # Индивидуальные приветствия под конкретные ссылки (код после ?start=).
@@ -51,7 +53,7 @@ WELCOME_MESSAGES = {
         "Привіт! Шукаєш запчастини чи аксесуари для Leopard 3?\n"
         "Наш партнер ZEVS PARTS підбере будь-яку деталь напряму з Китаю — від "
         "розхідників до кузовщини.\n\n"
-        "Натисни «Поділитися контактом» нижче, щоб менеджер розрахував вартість "
+        "Натисни «Відправити запит» нижче, щоб менеджер розрахував вартість "
         "та наявність під твоє авто."
     ),
     "sealion05": (
@@ -59,7 +61,7 @@ WELCOME_MESSAGES = {
         "Вітаємо в чаті Sea Lion 05!\n"
         "Потрібні оригінальні деталі, фільтри чи допи? ZEVS PARTS привезе все "
         "за VIN-кодом.\n\n"
-        "Натискай кнопку «Надіслати номер», і менеджер зв'яжеться для точного "
+        "Натискай кнопку «Відправити запит», і менеджер зв'яжеться для точного "
         "підбору та консультації."
     ),
     "sealion06": (
@@ -67,7 +69,7 @@ WELCOME_MESSAGES = {
         "Привіт! Шукаєш комплектуючі на Sea Lion 06?\n"
         "ZEVS PARTS допомагає швидко знайти потрібні запчастини в наявності "
         "та під замовлення.\n\n"
-        "Тисни «Поділитися контактом» — менеджер одразу напише в особисті "
+        "Тисни «Відправити запит» — менеджер одразу напише в особисті "
         "та зорієнтує по цінах і термінах."
     ),
     "sealion07ev": (
@@ -75,14 +77,14 @@ WELCOME_MESSAGES = {
         "Вітаємо у спільноті Sea Lion 07 EV!\n"
         "Нужні запчастини, тюнінг або ТО? Партнер клубу ZEVS PARTS закриє "
         "будь-який запит.\n\n"
-        "Натисни «Запросити дзвінок / Підбір» (кнопка нижче), щоб передати "
-        "номер менеджеру."
+        "Натисни «Відправити запит» (кнопка нижче), щоб передати звернення "
+        "менеджеру."
     ),
     "songl": (
         "*BYD SONG L*\n\n"
         "Привіт! Потрібні запчастини чи аксесуари на Song L?\n"
         "ZEVS PARTS підбере оригінальні комплектуючі без зайвих переплат.\n\n"
-        "Натискай «Поділитися контактом», щоб менеджер зв'язався з тобою "
+        "Натискай «Відправити запит», щоб менеджер зв'язався з тобою "
         "та уточнив деталі."
     ),
 }
@@ -99,14 +101,17 @@ SOURCE_IDS = {
 }
 
 
-def group_keyboard() -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton("👥 Наша група в Telegram", url=GROUP_URL)]]
+def welcome_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [InlineKeyboardButton("📝 Відправити запит", callback_data="send_request")],
+        [InlineKeyboardButton("👥 Підписатися на групу", url=GROUP_URL)],
+    ]
     return InlineKeyboardMarkup(buttons)
 
 
 async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
     """Отправляет сообщение и запоминает его ID, чтобы потом можно было удалить."""
-    msg = await update.message.reply_text(*args, **kwargs)
+    msg = await update.effective_chat.send_message(*args, **kwargs)
     context.user_data.setdefault("bot_message_ids", []).append(msg.message_id)
     return msg
 
@@ -118,8 +123,8 @@ async def clear_old_bot_messages(update: Update, context: ContextTypes.DEFAULT_T
     переписка не копилась и выглядела чисто.
 
     Ограничение Telegram: бот может удалять только СВОИ СОБСТВЕННЫЕ сообщения —
-    сообщения, отправленные самим клиентом (его /start, VIN-код и т.д.),
-    удалить программно нельзя, это ограничение самого Telegram Bot API.
+    сообщения, отправленные самим клиентом, удалить программно нельзя, это
+    ограничение самого Telegram Bot API.
     """
     message_ids = context.user_data.get("bot_message_ids", [])
     for msg_id in message_ids:
@@ -130,12 +135,15 @@ async def clear_old_bot_messages(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data["bot_message_ids"] = []
 
 
+def _cancel_job(context: ContextTypes.DEFAULT_TYPE, name: str) -> None:
+    for job in context.job_queue.get_jobs_by_name(name):
+        job.schedule_removal()
+
+
 # UTM-метки в ссылке для рекламы (Facebook/Telegram Ads).
 # Telegram разрешает в ?start= только буквы/цифры/подчёркивание/дефис —
 # без "=", "&", пробелов. Поэтому UTM кодируем компактно прямо в коде ссылки:
 #   ads__cmp-НАЗВАНИЕ_КАМПАНИИ__src-facebook__med-cpc__cnt-креатив1__trm-ключ
-# Каждый параметр необязателен, можно указать только нужные. Например:
-#   t.me/zeus_partsreg_bot?start=ads__cmp-litni_znizky__src-facebook__med-cpc
 UTM_PREFIX = "ads"
 UTM_FIELD_CODES = {
     "cmp": "utm_campaign",
@@ -162,11 +170,34 @@ def parse_ads_payload(payload: str):
     return UTM_PREFIX, utm
 
 
+async def refresh_buttons_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Через 1 годину просто перемальовує ті самі кнопки в тому ж повідомленні."""
+    data = context.job.data
+    try:
+        await context.bot.edit_message_reply_markup(
+            chat_id=data["chat_id"],
+            message_id=data["message_id"],
+            reply_markup=welcome_keyboard(),
+        )
+    except Exception as e:
+        logger.info("Не вдалося оновити кнопки (можливо, повідомлення вже видалене): %s", e)
+
+
+async def remind_are_you_there_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Через 30 хв після 'Відправити запит', якщо клієнт нічого не написав."""
+    chat_id = context.job.data["chat_id"]
+    await context.bot.send_message(chat_id=chat_id, text="Ви тут? 🙂")
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
 
     # Стираем сообщения бота из предыдущего цикла, чтобы переписка не копилась
     await clear_old_bot_messages(update, context)
+
+    # Отменяем "зависшие" таймеры из предыдущего цикла (если были)
+    _cancel_job(context, f"reminder_{user.id}")
+    _cancel_job(context, f"refresh_{user.id}")
 
     # Deep-link source: t.me/zeus_partsreg_bot?start=group1 -> context.args = ["group1"]
     raw_payload = context.args[0] if context.args else "direct"
@@ -176,87 +207,91 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("Новий /start від %s, джерело: %s, utm: %s", user.id, source, utm)
 
     text = WELCOME_MESSAGES.get(source, DEFAULT_WELCOME)
-    contact_button = KeyboardButton("📱 Надіслати мій контакт", request_contact=True)
-    keyboard = ReplyKeyboardMarkup([[contact_button]], resize_keyboard=True, one_time_keyboard=True)
+    msg = await send_and_track(update, context, text, parse_mode="Markdown", reply_markup=welcome_keyboard())
 
-    await send_and_track(update, context, text, parse_mode="Markdown", reply_markup=keyboard)
-    return ASK_CONTACT
+    # Через 1 годину перемальовуємо ці ж кнопки в цьому ж повідомленні
+    context.job_queue.run_once(
+        refresh_buttons_job,
+        when=BUTTONS_REFRESH_DELAY_SECONDS,
+        chat_id=update.effective_chat.id,
+        name=f"refresh_{user.id}",
+        data={"chat_id": update.effective_chat.id, "message_id": msg.message_id},
+    )
+
+    return ConversationHandler.END
 
 
-async def ask_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    contact = update.message.contact
+async def send_request_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    user = update.effective_user
+    await query.answer()
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Напишіть, будь ласка, ваш запит — що саме потрібно "
+             "(запчастини, аксесуари, VIN-код тощо):",
+    )
+
+    # Через 30 хв, якщо клієнт нічого не написав — одне нагадування "Ви тут?"
+    context.job_queue.run_once(
+        remind_are_you_there_job,
+        when=REMINDER_DELAY_SECONDS,
+        chat_id=update.effective_chat.id,
+        name=f"reminder_{user.id}",
+        data={"chat_id": update.effective_chat.id},
+    )
+
+    return ASK_REQUEST
+
+
+async def ask_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    details = update.message.text
     user = update.effective_user
 
-    if contact is None:
-        await send_and_track(
-            update, context,
-            "Будь ласка, натисніть кнопку «📱 Надіслати мій контакт», щоб продовжити."
-        )
-        return ASK_CONTACT
+    # Клиент ответил вовремя — отменяем напоминание "Ви тут?"
+    _cancel_job(context, f"reminder_{user.id}")
 
-    # Сохраняем контакт, карточку создадим после ответа на следующий вопрос
-    context.user_data["phone"] = contact.phone_number
-    context.user_data["full_name"] = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
-    context.user_data["username"] = f"@{user.username}" if user.username else "-"
-
-    await send_and_track(
-        update, context,
-        "Дякуємо! Тепер, будь ласка, коротко напишіть VIN-код авто та що саме "
-        "потрібно (запчастини, аксесуари, розхідники тощо):",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    return ASK_DETAILS
-
-
-async def ask_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    details = update.message.text
-
-    phone = context.user_data.get("phone")
-    full_name = context.user_data.get("full_name")
-    username = context.user_data.get("username")
+    full_name = user.full_name or "Без імені"
+    username = f"@{user.username}" if user.username else "-"
     source = context.user_data.get("source", "direct")
     utm = context.user_data.get("utm", {})
     source_id = SOURCE_IDS.get(source)  # None -> используется источник по умолчанию из .env
 
     try:
-        create_lead_card(full_name, phone, username, source, source_id, details, utm)
+        create_lead_card(full_name, None, username, source, source_id, details, utm)
     except Exception as e:
         logger.error("Помилка створення картки в KeyCRM: %s", e)
 
     # Заявка пришла по рекламной ссылке (?start=ads...) — сообщаем об этом
-    # Facebook через Conversions API, чтобы реклама оптимизировалась
+    # Facebook через Conversions API (без телефона используем Telegram ID)
     if source == UTM_PREFIX:
         try:
-            send_lead_event(phone, source_label=source)
+            send_lead_event(telegram_user_id=user.id, source_label=source)
         except Exception as e:
             logger.error("Помилка відправки Lead-події в Facebook CAPI: %s", e)
 
     await send_and_track(
         update, context,
-        "✅ Заявку прийнято! Наш менеджер зв'яжеться з вами найближчим часом.\n\n"
+        "✅ Запит прийнято! Наш менеджер зв'яжеться з вами найближчим часом.\n\n"
         "Приєднуйтесь до нашої групи, щоб не пропустити новини та акції:"
     )
     await send_and_track(
         update, context,
         f"{COMPANY_NAME}",
-        reply_markup=group_keyboard(),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 Наша група в Telegram", url=GROUP_URL)]]),
     )
 
-    # Чистим только рабочие данные заявки, но НЕ bot_message_ids —
-    # список нужен, чтобы стереть эти же сообщения при следующем /start
-    for key in ("phone", "full_name", "username", "source", "utm"):
+    for key in ("source", "utm"):
         context.user_data.pop(key, None)
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await send_and_track(
-        update, context,
-        "Заявку скасовано. Введіть /start, щоб почати знову.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    for key in ("phone", "full_name", "username", "source", "utm"):
-        context.user_data.pop(key, None)
+    user = update.effective_user
+    _cancel_job(context, f"reminder_{user.id}")
+    await send_and_track(update, context, "Запит скасовано. Введіть /start, щоб почати знову.")
+    context.user_data.pop("source", None)
+    context.user_data.pop("utm", None)
     return ConversationHandler.END
 
 
@@ -264,7 +299,7 @@ async def fallback_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Reply with group button if user writes something outside the flow."""
     await update.message.reply_text(
         "Щоб залишити заявку — введіть /start.\n\nАбо приєднуйтесь до нашої групи:",
-        reply_markup=group_keyboard(),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 Наша група в Telegram", url=GROUP_URL)]]),
     )
 
 
@@ -275,12 +310,19 @@ def main() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(send_request_button, pattern="^send_request$"),
+        ],
         states={
-            ASK_CONTACT: [MessageHandler(filters.CONTACT, ask_contact)],
-            ASK_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_details)],
+            ASK_REQUEST: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_request)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("start", start),  # /start всегда перезапускает диалог,
+            # даже если клиент "застрял" на середине предыдущего сценария
+            CallbackQueryHandler(send_request_button, pattern="^send_request$"),
+            CommandHandler("cancel", cancel),
+        ],
     )
 
     application.add_handler(conv_handler)
@@ -292,4 +334,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

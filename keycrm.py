@@ -27,12 +27,15 @@ def create_lead_card(
     Обязательное поле — "contact" с хотя бы одним заполненным полем
     (full_name, email или phone).
 
+    phone: необязателен (может быть None) — если клиент не делится телефоном,
+    идентифицируем его по имени/username из Telegram.
+
     source_id: если передан — используется он (например, конкретный источник
     под ссылку/группу). Если None — используется KEYCRM_SOURCE_ID из .env
     (общий источник по умолчанию, если задан).
 
-    details: свободный текст от клиента (VIN-код + что нужно) — попадёт
-    в комментарий менеджера (заметки) в карточке.
+    details: свободный текст-запрос от клиента — попадёт в комментарий
+    менеджера (заметки) в карточке.
 
     utm: словарь с ключами utm_source, utm_medium, utm_campaign, utm_term,
     utm_content — для рекламных ссылок (Facebook/Telegram Ads).
@@ -44,15 +47,16 @@ def create_lead_card(
 
     comment = f"Username: {username}\nДжерело: {source}"
     if details:
-        comment += f"\n\nЗапит клієнта (VIN / потрібно):\n{details}"
+        comment += f"\n\nЗапит клієнта:\n{details}"
+
+    contact = {"full_name": full_name or "Без імені"}
+    if phone:
+        contact["phone"] = phone
 
     data = {
         "title": title,
         "manager_comment": comment,
-        "contact": {
-            "full_name": full_name or "Без імені",
-            "phone": phone,
-        },
+        "contact": contact,
     }
 
     if KEYCRM_PIPELINE_ID:

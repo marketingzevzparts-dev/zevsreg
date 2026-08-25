@@ -29,13 +29,17 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()
 
 
-def send_lead_event(phone: str, source_label: str = "ads") -> dict | None:
+def send_lead_event(phone: str = None, telegram_user_id: int = None, source_label: str = "ads") -> dict | None:
     """
     Отправляет в Facebook Conversions API событие "Lead" — чтобы реклама
     "училась" на реальных заявках и оптимизировалась по конверсиям.
 
-    Телефон хешируется (SHA-256) перед отправкой — это требование Facebook,
+    Данные хешируются (SHA-256) перед отправкой — это требование Facebook,
     сырые персональные данные API не принимает.
+
+    Если телефон не передан (клиент больше не оставляет телефон) — используем
+    Telegram ID как external_id (более слабый способ сопоставления с
+    пользователем Facebook, но лучше, чем ничего).
 
     Возвращает None, если FB_PIXEL_ID/FB_ACCESS_TOKEN не заданы (интеграция
     просто не настроена) — это не ошибка, а штатный случай для тех, кому
@@ -44,8 +48,14 @@ def send_lead_event(phone: str, source_label: str = "ads") -> dict | None:
     if not FB_PIXEL_ID or not FB_ACCESS_TOKEN:
         return None
 
-    normalized_phone = _normalize_phone(phone)
-    if not normalized_phone:
+    user_data = {}
+    normalized_phone = _normalize_phone(phone) if phone else None
+    if normalized_phone:
+        user_data["ph"] = [_sha256(normalized_phone)]
+    if telegram_user_id:
+        user_data.setdefault("external_id", []).append(_sha256(str(telegram_user_id)))
+
+    if not user_data:
         return None
 
     event = {
@@ -53,9 +63,7 @@ def send_lead_event(phone: str, source_label: str = "ads") -> dict | None:
         "event_time": int(time.time()),
         "event_id": str(uuid.uuid4()),
         "action_source": "chat",  # заявка пришла через переписку в Telegram-боте
-        "user_data": {
-            "ph": [_sha256(normalized_phone)],
-        },
+        "user_data": user_data,
         "custom_data": {
             "lead_source": source_label,
         },
