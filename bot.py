@@ -109,6 +109,16 @@ def welcome_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+def final_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки после завершения заявки — те же 2 кнопки, но с другой подписью
+    на первой (чтобы было понятно, что это уже НОВЫЙ запрос)."""
+    buttons = [
+        [InlineKeyboardButton("🆕 Новий запит", callback_data="send_request")],
+        [InlineKeyboardButton("👥 Підписатися на групу", url=GROUP_URL)],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
 async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
     """Отправляет сообщение и запоминает его ID, чтобы потом можно было удалить."""
     msg = await update.effective_chat.send_message(*args, **kwargs)
@@ -272,13 +282,12 @@ async def ask_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     await send_and_track(
         update, context,
-        "✅ Запит прийнято! Наш менеджер зв'яжеться з вами найближчим часом.\n\n"
-        "Приєднуйтесь до нашої групи, щоб не пропустити новини та акції:"
+        "✅ Запит прийнято! Наш менеджер зв'яжеться з вами найближчим часом."
     )
     await send_and_track(
         update, context,
         f"{COMPANY_NAME}",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 Наша група в Telegram", url=GROUP_URL)]]),
+        reply_markup=final_keyboard(),
     )
 
     for key in ("source", "utm"):
@@ -296,10 +305,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def fallback_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Reply with group button if user writes something outside the flow."""
+    """Reply with the same 2 buttons if user writes something outside the flow."""
     await update.message.reply_text(
-        "Щоб залишити заявку — введіть /start.\n\nАбо приєднуйтесь до нашої групи:",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 Наша група в Telegram", url=GROUP_URL)]]),
+        "Щоб залишити заявку — натисніть кнопку нижче, або приєднуйтесь до нашої групи:",
+        reply_markup=final_keyboard(),
     )
 
 
