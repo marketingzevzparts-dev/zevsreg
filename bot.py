@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 from dotenv import load_dotenv
 from telegram import (
@@ -180,6 +181,22 @@ def parse_ads_payload(payload: str):
     return UTM_PREFIX, utm
 
 
+# Ищем номер телефона прямо в тексте запроса (клиент пишет и телефон,
+# и что нужно, одним сообщением). Ловим украинские/международные форматы:
+# +380671234567, 380671234567, 0671234567, с пробелами/дефисами/скобками.
+PHONE_PATTERN = re.compile(r"(?:\+?38)?0\d{2}[\s\-\(\)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}")
+
+
+def extract_phone(text: str) -> str | None:
+    if not text:
+        return None
+    match = PHONE_PATTERN.search(text)
+    if not match:
+        return None
+    digits = re.sub(r"\D", "", match.group())
+    return digits or None
+
+
 async def refresh_buttons_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Через 1 годину просто перемальовує ті самі кнопки в тому ж повідомленні."""
     data = context.job.data
@@ -238,8 +255,8 @@ async def send_request_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text="Напишіть, будь ласка, ваш запит — що саме потрібно "
-             "(запчастини, аксесуари, VIN-код тощо):",
+        text="Напишіть, будь ласка, ваш номер телефону та що саме потрібно "
+             "(запчастини, аксесуари, VIN-код тощо) — одним повідомленням:",
     )
 
     # Через 30 хв, якщо клієнт нічого не написав — одне нагадування "Ви тут?"
@@ -261,6 +278,7 @@ async def ask_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     # Клиент ответил вовремя — отменяем напоминание "Ви тут?"
     _cancel_job(context, f"reminder_{user.id}")
 
+    phone = extract_phone(details)
     full_name = user.full_name or "Без імені"
     username = f"@{user.username}" if user.username else "-"
     source = context.user_data.get("source", "direct")
@@ -268,15 +286,15 @@ async def ask_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     source_id = SOURCE_IDS.get(source)  # None -> используется источник по умолчанию из .env
 
     try:
-        create_lead_card(full_name, None, username, source, source_id, details, utm)
+        create_lead_card(full_name, phone, username, source, source_id, details, utm)
     except Exception as e:
         logger.error("Помилка створення картки в KeyCRM: %s", e)
 
     # Заявка пришла по рекламной ссылке (?start=ads...) — сообщаем об этом
-    # Facebook через Conversions API (без телефона используем Telegram ID)
+    # Facebook через Conversions API (телефон в приоритете, иначе Telegram ID)
     if source == UTM_PREFIX:
         try:
-            send_lead_event(telegram_user_id=user.id, source_label=source)
+            send_lead_event(phone=phone, telegram_user_id=user.id, source_label=source)
         except Exception as e:
             logger.error("Помилка відправки Lead-події в Facebook CAPI: %s", e)
 
