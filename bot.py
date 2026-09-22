@@ -99,6 +99,7 @@ SOURCE_IDS = {
     "sealion07ev": 18,
     "songl": 19,
     "ads": 20,  # реклама Facebook/Telegram Ads — t.me/zeus_partsreg_bot?start=ads
+    "org": 21,  # органика из своей ТГ-групи (розділи/марки) — t.me/zeus_partsreg_bot?start=org
 }
 
 
@@ -151,11 +152,13 @@ def _cancel_job(context: ContextTypes.DEFAULT_TYPE, name: str) -> None:
         job.schedule_removal()
 
 
-# UTM-метки в ссылке для рекламы (Facebook/Telegram Ads).
+# UTM-метки в ссылке (реклама Facebook/Telegram Ads, а также органика из
+# своей ТГ-групи — оба типа ссылок используют один и тот же принцип).
 # Telegram разрешает в ?start= только буквы/цифры/подчёркивание/дефис —
 # без "=", "&", пробелов. Поэтому UTM кодируем компактно прямо в коде ссылки:
 #   ads__cmp-НАЗВАНИЕ_КАМПАНИИ__src-facebook__med-cpc__cnt-креатив1__trm-ключ
-UTM_PREFIX = "ads"
+#   org__cnt-leopard__trm-запчастини   (пример для органіки з розділу "Leopard")
+UTM_PREFIXES = ("ads", "org")  # источники, у которых можно разбирать UTM-хвост
 UTM_FIELD_CODES = {
     "cmp": "utm_campaign",
     "src": "utm_source",
@@ -167,18 +170,18 @@ UTM_FIELD_CODES = {
 
 def parse_ads_payload(payload: str):
     """
-    Если payload начинается с "ads" — считаем это рекламной ссылкой,
-    возвращаем (source_key="ads", utm_dict). Иначе (payload, {}).
+    Если payload начинается с одного из UTM_PREFIXES ("ads" или "org") —
+    возвращаем (source_key=этот_префикс, utm_dict). Иначе (payload, {}).
     """
-    if not payload.startswith(UTM_PREFIX):
-        return payload, {}
-
-    utm = {}
-    for part in payload.split("__")[1:]:
-        for code, field in UTM_FIELD_CODES.items():
-            if part.startswith(code + "-"):
-                utm[field] = part[len(code) + 1:]
-    return UTM_PREFIX, utm
+    for prefix in UTM_PREFIXES:
+        if payload.startswith(prefix):
+            utm = {}
+            for part in payload.split("__")[1:]:
+                for code, field in UTM_FIELD_CODES.items():
+                    if part.startswith(code + "-"):
+                        utm[field] = part[len(code) + 1:]
+            return prefix, utm
+    return payload, {}
 
 
 # Ищем номер телефона прямо в тексте запроса (клиент пишет и телефон,
@@ -290,9 +293,10 @@ async def ask_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     except Exception as e:
         logger.error("Помилка створення картки в KeyCRM: %s", e)
 
-    # Заявка пришла по рекламной ссылке (?start=ads...) — сообщаем об этом
-    # Facebook через Conversions API (телефон в приоритете, иначе Telegram ID)
-    if source == UTM_PREFIX:
+    # Заявка пришла именно по РЕКЛАМНОЙ ссылке (?start=ads...) — сообщаем
+    # об этом Facebook через Conversions API. Органику (?start=org...) в
+    # Facebook не шлём — там нечего оптимизировать, это не платный трафик.
+    if source == "ads":
         try:
             send_lead_event(phone=phone, telegram_user_id=user.id, source_label=source)
         except Exception as e:
