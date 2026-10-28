@@ -31,6 +31,7 @@ GROUP_URL = os.getenv("GROUP_URL", "https://t.me/+NoAgrHxYygA0Y2Ey")
 
 ASK_REQUEST = range(1)[0]
 
+MAX_PHONE_ASKS = 2  # скільки разів перепитуємо телефон, потім створюємо картку без нього
 REMINDER_DELAY_SECONDS = 30 * 60       # напоминание "Ви тут?" через 30 хв
 BUTTONS_REFRESH_DELAY_SECONDS = 60 * 60  # перемалёвка тех же кнопок через 1 годину
 
@@ -255,6 +256,8 @@ async def send_request_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     user = update.effective_user
     await query.answer()
+    context.user_data.pop("pending_details", None)
+    context.user_data.pop("phone_asks", None)
 
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
@@ -281,7 +284,31 @@ async def ask_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     # Клиент ответил вовремя — отменяем напоминание "Ви тут?"
     _cancel_job(context, f"reminder_{user.id}")
 
+    # Если в сообщении нет телефона — просим написать его и ждём следующее
+    # сообщение. Первый текст запроса сохраняем и склеиваем с ответом.
     phone = extract_phone(details)
+    pending = context.user_data.get("pending_details")
+    if pending:
+        details = f"{pending}\n{details}"
+        phone = phone or extract_phone(details)
+    if not phone and context.user_data.get("phone_asks", 0) < MAX_PHONE_ASKS:
+        context.user_data["pending_details"] = details
+        context.user_data["phone_asks"] = context.user_data.get("phone_asks", 0) + 1
+        await send_and_track(
+            update, context,
+            "📞 Напишіть, будь ласка, ваш НОМЕР ТЕЛЕФОНУ (наприклад, 067 123 45 67) — "
+            "без нього менеджер не зможе з вами зв'язатися.",
+        )
+        context.job_queue.run_once(
+            remind_are_you_there_job,
+            when=REMINDER_DELAY_SECONDS,
+            chat_id=update.effective_chat.id,
+            name=f"reminder_{user.id}",
+            data={"chat_id": update.effective_chat.id},
+        )
+        return ASK_REQUEST
+    context.user_data.pop("pending_details", None)
+    context.user_data.pop("phone_asks", None)
     full_name = user.full_name or "Без імені"
     username = f"@{user.username}" if user.username else "-"
     source = context.user_data.get("source", "direct")
